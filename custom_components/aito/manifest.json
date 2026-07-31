@@ -3,8 +3,8 @@
   "name": "AITO",
   "codeowners": ["@kongweiteng"],
   "config_flow": true,
-  "documentation": "https://github.com/kwt-homeassistant/aito",
-  "issue_tracker": "https://github.com/kwt-homeassistant/aito/issues",
+  "documentation": "https://github.com/kwt-homeassistant/bluejay-connector",
+  "issue_tracker": "https://github.com/kwt-homeassistant/bluejay-connector/issues",
   "iot_class": "cloud_polling",
   "requirements": ["cryptography>=42.0.0", "Pillow>=9.0.0"],
   "version": "0.4.0"
