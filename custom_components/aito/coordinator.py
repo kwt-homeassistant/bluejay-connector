@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import timedelta
+import asyncio
+from datetime import date, datetime, timedelta, timezone
 from functools import partial
 import logging
 import time
@@ -9,6 +10,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 try:
     from homeassistant.exceptions import ConfigEntryAuthFailed
@@ -40,14 +42,26 @@ from .const import (
     DOMAIN,
     scan_interval_seconds,
 )
-from .devices import VehicleSpec, dynamic_sections, has_energy_report_sensors
+from .devices import (
+    VehicleSpec,
+    dynamic_sections,
+    has_energy_report_sensors,
+    has_trip_history_sensors,
+)
 from .huawei_auth import HuaweiAuthError, HuaweiIosAuthClient
 from .models import Vehicle
 from .storage import decrypt_password, decrypt_session_context, encrypt_session_context
+from .trip_history import TripHistory, next_backfill_range
 
 _LOGGER = logging.getLogger(__name__)
 
 _ENERGY_REPORT_REFRESH_SECONDS = 60 * 60
+_TRIP_HISTORY_REFRESH_SECONDS = 30 * 60
+_TRIP_HISTORY_DAYS = 7
+_TRIP_HISTORY_RETENTION_DAYS = 365
+_TRIP_HISTORY_BACKFILL_CHUNK_DAYS = 30
+_TRIP_HISTORY_BACKFILL_DELAY_SECONDS = 1
+_TRIP_HISTORY_BACKFILL_RETRY_SECONDS = 30 * 60
 
 # The vehicle answers a command that would not change its state with this code.
 _COMMAND_STATE_UNCHANGED_CODES = frozenset({302, "302"})
@@ -65,6 +79,8 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         asset_store: Any | None = None,
         identity: dict[str, Any] | None = None,
         identity_store: Any | None = None,
+        trip_history_store: Any | None = None,
+        trip_histories: dict[str, TripHistory] | None = None,
     ) -> None:
         super().__init__(
             hass,
@@ -84,9 +100,16 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._identity_dirty = False
         self._energy_reports: dict[str, dict[str, Any]] = {}
         self._energy_report_refresh_at: dict[str, float] = {}
+        self.trip_history_store = trip_history_store
+        self.trip_histories = trip_histories if trip_histories is not None else {}
+        self._trip_history_lock = asyncio.Lock()
+        self._trip_history_refresh_at: dict[str, float] = {}
+        self._trip_history_backfill_tasks: dict[str, asyncio.Task[None]] = {}
+        self._trip_history_backfill_retry_at: dict[str, float] = {}
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         result: dict[str, dict[str, Any]] = {}
+        local_today = dt_util.now().date()
         for vehicle in self.vehicles:
             spec = self.vehicle_specs.get(vehicle.id)
             if spec is None:
@@ -109,6 +132,13 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     self._energy_reports[vehicle.id] = report
                 if cached_report := self._energy_reports.get(vehicle.id):
                     data = {**data, "energyReport": cached_report}
+            if has_trip_history_sensors(spec):
+                history = await self._async_trip_history(vehicle.id)
+                if history is not None:
+                    await self._async_merge_trip_history(vehicle.id, history, local_today)
+                if cached_history := self.trip_histories.get(vehicle.id):
+                    data = {**data, "tripHistory": cached_history.sensor_data(local_today)}
+                self._start_trip_history_backfill(vehicle.id, local_today)
             result[vehicle.id] = data
         return result
 
@@ -195,11 +225,151 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         try:
             report = await self._async_apig_request(self.client.latest_energy_report, vehicle_id)
         except AitoApiError:
-            _LOGGER.warning("AITO energy report request failed for vehicle %s", vehicle_id, exc_info=True)
+            _LOGGER.warning("AITO energy report request failed", exc_info=True)
             self._energy_report_refresh_at[vehicle_id] = now + _ENERGY_REPORT_REFRESH_SECONDS
             return None
         self._energy_report_refresh_at[vehicle_id] = now + _ENERGY_REPORT_REFRESH_SECONDS
         return report if isinstance(report, dict) else None
+
+    async def _async_trip_history(self, vehicle_id: str) -> TripHistory | None:
+        now = time.monotonic()
+        if now < self._trip_history_refresh_at.get(vehicle_id, 0):
+            return None
+        end_date = dt_util.now().date()
+        start_date = end_date - timedelta(days=_TRIP_HISTORY_DAYS - 1)
+        try:
+            response = await self._async_apig_request(
+                self.client.day_trip_range,
+                vehicle_id,
+                start_date,
+                end_date,
+            )
+            history = TripHistory.from_api(
+                response,
+                start_date=start_date,
+                end_date=end_date,
+                fetched_at=datetime.now(timezone.utc),
+                local_tz=dt_util.DEFAULT_TIME_ZONE,
+            )
+        except AitoApiError:
+            _LOGGER.warning("AITO trip history request failed", exc_info=True)
+            self._trip_history_refresh_at[vehicle_id] = now + _TRIP_HISTORY_REFRESH_SECONDS
+            return None
+        except ValueError:
+            _LOGGER.warning("AITO trip history response did not match the expected contract")
+            self._trip_history_refresh_at[vehicle_id] = now + _TRIP_HISTORY_REFRESH_SECONDS
+            return None
+        self._trip_history_refresh_at[vehicle_id] = now + _TRIP_HISTORY_REFRESH_SECONDS
+        return history
+
+    async def _async_merge_trip_history(
+        self,
+        vehicle_id: str,
+        incoming: TripHistory,
+        today: date,
+    ) -> bool:
+        retention_start = today - timedelta(days=_TRIP_HISTORY_RETENTION_DAYS - 1)
+        async with self._trip_history_lock:
+            histories = [incoming]
+            if existing := self.trip_histories.get(vehicle_id):
+                histories.insert(0, existing)
+            merged = TripHistory.merge(
+                *histories,
+                retention_start=retention_start,
+                retention_end=today,
+            )
+            updated = {**self.trip_histories, vehicle_id: merged}
+            if self.trip_history_store is not None:
+                try:
+                    await self.trip_history_store.async_save(updated)
+                except Exception:
+                    _LOGGER.warning(
+                        "AITO could not save private trip history",
+                        exc_info=True,
+                    )
+                    return False
+            self.trip_histories = updated
+            return True
+
+    def _start_trip_history_backfill(self, vehicle_id: str, today: date) -> None:
+        if self.trip_history_store is None:
+            return
+        if time.monotonic() < self._trip_history_backfill_retry_at.get(vehicle_id, 0):
+            return
+        task = self._trip_history_backfill_tasks.get(vehicle_id)
+        if task is not None and not task.done():
+            return
+        if next_backfill_range(
+            self.trip_histories.get(vehicle_id),
+            today=today,
+            retention_days=_TRIP_HISTORY_RETENTION_DAYS,
+            chunk_days=_TRIP_HISTORY_BACKFILL_CHUNK_DAYS,
+        ) is None:
+            return
+        self._trip_history_backfill_tasks[vehicle_id] = self.hass.async_create_task(
+            self._async_backfill_trip_history(vehicle_id),
+            name="aito-trip-history-backfill",
+        )
+
+    async def _async_backfill_trip_history(self, vehicle_id: str) -> None:
+        try:
+            while True:
+                today = dt_util.now().date()
+                date_range = next_backfill_range(
+                    self.trip_histories.get(vehicle_id),
+                    today=today,
+                    retention_days=_TRIP_HISTORY_RETENTION_DAYS,
+                    chunk_days=_TRIP_HISTORY_BACKFILL_CHUNK_DAYS,
+                )
+                if date_range is None:
+                    self._trip_history_backfill_retry_at.pop(vehicle_id, None)
+                    return
+                start_date, end_date = date_range
+                response = await self._async_apig_request(
+                    self.client.day_trip_range,
+                    vehicle_id,
+                    start_date,
+                    end_date,
+                )
+                incoming = TripHistory.from_api(
+                    response,
+                    start_date=start_date,
+                    end_date=end_date,
+                    fetched_at=datetime.now(timezone.utc),
+                    local_tz=dt_util.DEFAULT_TIME_ZONE,
+                )
+                if not await self._async_merge_trip_history(vehicle_id, incoming, today):
+                    raise RuntimeError("private trip history storage failed")
+                self._publish_trip_history_summary(vehicle_id, today)
+                await asyncio.sleep(_TRIP_HISTORY_BACKFILL_DELAY_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _LOGGER.warning("AITO trip history backfill paused and will retry", exc_info=True)
+            self._trip_history_backfill_retry_at[vehicle_id] = (
+                time.monotonic() + _TRIP_HISTORY_BACKFILL_RETRY_SECONDS
+            )
+        finally:
+            self._trip_history_backfill_tasks.pop(vehicle_id, None)
+
+    def _publish_trip_history_summary(self, vehicle_id: str, today: date) -> None:
+        history = self.trip_histories.get(vehicle_id)
+        current_data = (self.data or {}).get(vehicle_id)
+        if history is None or not isinstance(current_data, dict):
+            return
+        updated = dict(self.data or {})
+        updated[vehicle_id] = {
+            **current_data,
+            "tripHistory": history.sensor_data(today),
+        }
+        self.async_set_updated_data(updated)
+
+    async def async_shutdown(self) -> None:
+        tasks = list(self._trip_history_backfill_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _async_apig_request(self, request, *args: Any, retry_after_refresh: bool = True) -> Any:
         try:

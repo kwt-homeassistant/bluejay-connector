@@ -1,0 +1,44 @@
+{
+  "trips": [
+    {
+      "date": 4071398400000,
+      "odo": 12.5,
+      "trips": [
+        {
+          "tripId": "synthetic-trip-id-not-real",
+          "tripOdo": 8.5,
+          "tripStartTime": 4071463440000,
+          "tripTime": 24,
+          "avgSpeed": 22,
+          "maxSpeed": 65.9,
+          "avgPowerConsum": 20.2,
+          "avgFuelConsum": 0,
+          "unknownFutureField": {
+            "location": "must be discarded"
+          }
+        },
+        {
+          "tripOdo": 4,
+          "tripStartTime": 4071429000000,
+          "tripTime": 11
+        }
+      ]
+    },
+    {
+      "date": 4071312000000,
+      "odo": null,
+      "trips": [
+        {
+          "tripOdo": 3.2,
+          "tripStartTime": 4071344400000,
+          "tripTime": 9
+        }
+      ]
+    },
+    {
+      "date": 4070793600000,
+      "odo": 999,
+      "trips": []
+    }
+  ]
+}

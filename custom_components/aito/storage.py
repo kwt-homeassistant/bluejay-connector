@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 ASSET_STORAGE_VERSION = 1
 IDENTITY_STORAGE_VERSION = 2
+TRIP_HISTORY_STORAGE_VERSION = 1
 DEVICE_IDENTITY_KEY = f"{DOMAIN}/device_identity.json"
 IDENTITY_ACCOUNT_KEY = "identity_account_key"
 
@@ -34,6 +35,10 @@ def asset_storage_key(asset_key: str) -> str:
 
 def device_identity_storage_key() -> str:
     return DEVICE_IDENTITY_KEY
+
+
+def trip_history_storage_key(entry_id: str) -> str:
+    return f"{DOMAIN}/trip_history/{_safe_asset_key(entry_id)}.json"
 
 
 def asset_key_from_login_data(data: dict[str, Any]) -> str:
@@ -129,6 +134,49 @@ class AitoDeviceIdentityStore:
         accounts = _identity_accounts(stored)
         accounts[account_key] = _stored_identity(data)
         await self._store.async_save({"accounts": accounts})
+
+
+class AitoTripHistoryStore:
+    """Private Home Assistant storage for sanitized trip summaries."""
+
+    def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
+        from homeassistant.helpers.storage import Store
+
+        self._store = Store(
+            hass,
+            TRIP_HISTORY_STORAGE_VERSION,
+            trip_history_storage_key(entry_id),
+        )
+
+    async def async_load(self) -> dict[str, "TripHistory"]:
+        from .trip_history import TripHistory
+
+        data = await self._store.async_load()
+        vehicles = data.get("vehicles") if isinstance(data, dict) else None
+        if not isinstance(vehicles, dict):
+            return {}
+        histories: dict[str, TripHistory] = {}
+        for vehicle_id, value in vehicles.items():
+            if not isinstance(vehicle_id, str) or not vehicle_id:
+                continue
+            try:
+                histories[vehicle_id] = TripHistory.from_storage(value)
+            except ValueError:
+                continue
+        return histories
+
+    async def async_save(self, histories: dict[str, "TripHistory"]) -> None:
+        await self._store.async_save(
+            {
+                "vehicles": {
+                    vehicle_id: history.to_storage()
+                    for vehicle_id, history in histories.items()
+                }
+            }
+        )
+
+    async def async_remove(self) -> None:
+        await self._store.async_remove()
 
 
 def identity_account_key(phone: str) -> str:

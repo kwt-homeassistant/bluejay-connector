@@ -77,6 +77,54 @@
       "average_fuel_consumption": {
         "name": "平均油耗"
       },
+      "today_average_power_consumption": {
+        "name": "今日平均电耗"
+      },
+      "today_average_fuel_consumption": {
+        "name": "今日平均油耗"
+      },
+      "today_total_power_consumption": {
+        "name": "今日总用电量"
+      },
+      "today_total_fuel_consumption": {
+        "name": "今日总用油量"
+      },
+      "month_average_power_consumption": {
+        "name": "本月平均电耗"
+      },
+      "month_average_fuel_consumption": {
+        "name": "本月平均油耗"
+      },
+      "month_total_power_consumption": {
+        "name": "本月总用电量"
+      },
+      "month_total_fuel_consumption": {
+        "name": "本月总用油量"
+      },
+      "last_trip_distance": {
+        "name": "最近一次行程里程"
+      },
+      "last_trip_started_at": {
+        "name": "最近一次行程开始时间"
+      },
+      "last_trip_duration": {
+        "name": "最近一次行程时长"
+      },
+      "today_trip_distance": {
+        "name": "今日行驶里程"
+      },
+      "seven_day_trip_distance": {
+        "name": "最近7日行驶里程"
+      },
+      "trip_report_updated_at": {
+        "name": "行程报告更新时间"
+      },
+      "trip_history_coverage_days": {
+        "name": "行程历史覆盖天数"
+      },
+      "trip_history_backfill_progress": {
+        "name": "行程历史回填进度"
+      },
       "sum_remaining_mileage": {
         "name": "综合剩余里程"
       },

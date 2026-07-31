@@ -113,6 +113,172 @@ def _parking_text(value: Any) -> str | None:
         return None
 
 
+ENERGY_REPORT_SENSORS: tuple[SensorSpec, ...] = (
+    SensorSpec(
+        key="average_power_consumption",
+        path=("energyReport", "total", "avgPowerConsum"),
+        translation_key="average_power_consumption",
+        source="energy_report",
+        native_unit_of_measurement="kWh/100km",
+        state_class="measurement",
+        converter=_reject_sentinel,
+    ),
+    SensorSpec(
+        key="average_fuel_consumption",
+        path=("energyReport", "total", "avgFuelConsum"),
+        translation_key="average_fuel_consumption",
+        source="energy_report",
+        native_unit_of_measurement="L/100km",
+        state_class="measurement",
+        converter=_reject_sentinel,
+    ),
+    SensorSpec(
+        key="today_average_power_consumption",
+        path=("energyReport", "today", "avgPowerConsum"),
+        translation_key="today_average_power_consumption",
+        source="energy_report",
+        native_unit_of_measurement="kWh/100km",
+        state_class="measurement",
+        converter=_reject_sentinel,
+    ),
+    SensorSpec(
+        key="today_average_fuel_consumption",
+        path=("energyReport", "today", "avgFuelConsum"),
+        translation_key="today_average_fuel_consumption",
+        source="energy_report",
+        native_unit_of_measurement="L/100km",
+        state_class="measurement",
+        converter=_reject_sentinel,
+    ),
+    SensorSpec(
+        key="today_total_power_consumption",
+        path=("energyReport", "today", "totalPowerConsum"),
+        translation_key="today_total_power_consumption",
+        source="energy_report",
+        device_class="energy",
+        native_unit_of_measurement="kWh",
+        state_class="total",
+        converter=_reject_sentinel,
+    ),
+    SensorSpec(
+        key="today_total_fuel_consumption",
+        path=("energyReport", "today", "totalFuelConsum"),
+        translation_key="today_total_fuel_consumption",
+        source="energy_report",
+        native_unit_of_measurement="L",
+        state_class="total",
+        converter=_reject_sentinel,
+    ),
+    SensorSpec(
+        key="month_average_power_consumption",
+        path=("energyReport", "thisMonth", "avgPowerConsum"),
+        translation_key="month_average_power_consumption",
+        source="energy_report",
+        native_unit_of_measurement="kWh/100km",
+        state_class="measurement",
+        converter=_reject_sentinel,
+    ),
+    SensorSpec(
+        key="month_average_fuel_consumption",
+        path=("energyReport", "thisMonth", "avgFuelConsum"),
+        translation_key="month_average_fuel_consumption",
+        source="energy_report",
+        native_unit_of_measurement="L/100km",
+        state_class="measurement",
+        converter=_reject_sentinel,
+    ),
+    SensorSpec(
+        key="month_total_power_consumption",
+        path=("energyReport", "thisMonth", "totalPowerConsum"),
+        translation_key="month_total_power_consumption",
+        source="energy_report",
+        device_class="energy",
+        native_unit_of_measurement="kWh",
+        state_class="total",
+        converter=_reject_sentinel,
+    ),
+    SensorSpec(
+        key="month_total_fuel_consumption",
+        path=("energyReport", "thisMonth", "totalFuelConsum"),
+        translation_key="month_total_fuel_consumption",
+        source="energy_report",
+        native_unit_of_measurement="L",
+        state_class="total",
+        converter=_reject_sentinel,
+    ),
+)
+
+
+TRIP_HISTORY_SENSORS: tuple[SensorSpec, ...] = (
+    SensorSpec(
+        key="last_trip_distance",
+        path=("tripHistory", "lastTripOdo"),
+        translation_key="last_trip_distance",
+        source="trip_history",
+        device_class="distance",
+        native_unit_of_measurement="km",
+        state_class="measurement",
+    ),
+    SensorSpec(
+        key="last_trip_started_at",
+        path=("tripHistory", "lastTripStartTime"),
+        translation_key="last_trip_started_at",
+        source="trip_history",
+        device_class="timestamp",
+    ),
+    SensorSpec(
+        key="last_trip_duration",
+        path=("tripHistory", "lastTripTime"),
+        translation_key="last_trip_duration",
+        source="trip_history",
+        device_class="duration",
+        native_unit_of_measurement="min",
+        state_class="measurement",
+    ),
+    SensorSpec(
+        key="today_trip_distance",
+        path=("tripHistory", "todayOdo"),
+        translation_key="today_trip_distance",
+        source="trip_history",
+        device_class="distance",
+        native_unit_of_measurement="km",
+        state_class="total",
+    ),
+    SensorSpec(
+        key="seven_day_trip_distance",
+        path=("tripHistory", "recentSevenDayOdo"),
+        translation_key="seven_day_trip_distance",
+        source="trip_history",
+        device_class="distance",
+        native_unit_of_measurement="km",
+        state_class="measurement",
+    ),
+    SensorSpec(
+        key="trip_report_updated_at",
+        path=("tripHistory", "updatedAt"),
+        translation_key="trip_report_updated_at",
+        source="trip_history",
+        device_class="timestamp",
+    ),
+    SensorSpec(
+        key="trip_history_coverage_days",
+        path=("tripHistory", "archiveCoverageDays"),
+        translation_key="trip_history_coverage_days",
+        source="trip_history",
+        native_unit_of_measurement="d",
+        state_class="measurement",
+    ),
+    SensorSpec(
+        key="trip_history_backfill_progress",
+        path=("tripHistory", "archiveBackfillProgress"),
+        translation_key="trip_history_backfill_progress",
+        source="trip_history",
+        native_unit_of_measurement="%",
+        state_class="measurement",
+    ),
+)
+
+
 DEVICES: tuple[VehicleSpec, ...] = (
     VehicleSpec(
         key="seres_f3",
@@ -222,22 +388,8 @@ DEVICES: tuple[VehicleSpec, ...] = (
                 converter=_reject_sentinel,
                 sticky=True,
             ),
-            SensorSpec(
-                key="average_power_consumption",
-                path=("energyReport", "total", "avgPowerConsum"),
-                translation_key="average_power_consumption",
-                source="energy_report",
-                native_unit_of_measurement="kWh/100km",
-                state_class="measurement",
-            ),
-            SensorSpec(
-                key="average_fuel_consumption",
-                path=("energyReport", "total", "avgFuelConsum"),
-                translation_key="average_fuel_consumption",
-                source="energy_report",
-                native_unit_of_measurement="L/100km",
-                state_class="measurement",
-            ),
+            *ENERGY_REPORT_SENSORS,
+            *TRIP_HISTORY_SENSORS,
             SensorSpec(
                 key="sum_remaining_mileage",
                 path=("vehicleStatus", "sumRemainingMileage"),
@@ -443,22 +595,8 @@ DEVICES: tuple[VehicleSpec, ...] = (
                 converter=_reject_sentinel,
                 sticky=True,
             ),
-            SensorSpec(
-                key="average_power_consumption",
-                path=("energyReport", "total", "avgPowerConsum"),
-                translation_key="average_power_consumption",
-                source="energy_report",
-                native_unit_of_measurement="kWh/100km",
-                state_class="measurement",
-            ),
-            SensorSpec(
-                key="average_fuel_consumption",
-                path=("energyReport", "total", "avgFuelConsum"),
-                translation_key="average_fuel_consumption",
-                source="energy_report",
-                native_unit_of_measurement="L/100km",
-                state_class="measurement",
-            ),
+            *ENERGY_REPORT_SENSORS,
+            *TRIP_HISTORY_SENSORS,
         ),
     ),
 )
@@ -483,6 +621,10 @@ def dynamic_sections(spec: VehicleSpec) -> dict[str, int]:
 
 def has_energy_report_sensors(spec: VehicleSpec) -> bool:
     return any(sensor.source == "energy_report" for sensor in spec.sensors)
+
+
+def has_trip_history_sensors(spec: VehicleSpec) -> bool:
+    return any(sensor.source == "trip_history" for sensor in spec.sensors)
 
 
 def value_at_path(data: dict[str, Any], path: tuple[str, ...]) -> Any:

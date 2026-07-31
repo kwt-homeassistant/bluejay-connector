@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 import json
 import secrets
 import ssl
@@ -246,10 +246,28 @@ class AitoApiClient:
         )
 
     def latest_energy_report(self, vehicle_id: str) -> Any:
-        """Return the official total, daily, and monthly energy report."""
+        """Return the current total, today, and this-month energy report."""
         return self._request_apig(
             "GET",
             "/vdas/v1/report/energy/latest",
+            vehicle_id=vehicle_id,
+        )
+
+    def day_trip_range(
+        self,
+        vehicle_id: str,
+        start_date: date | str,
+        end_date: date | str,
+    ) -> Any:
+        """Return the official per-day and per-trip summaries for a date range."""
+        start_value = _date_query_value(start_date)
+        end_value = _date_query_value(end_date)
+        if start_value > end_value:
+            raise ValueError("AITO trip history end date is before its start date")
+        query = urlencode({"startDate": start_value, "endDate": end_value})
+        return self._request_apig(
+            "GET",
+            f"/vdas/v1/report/day-trip-range?{query}",
             vehicle_id=vehicle_id,
         )
 
@@ -487,6 +505,20 @@ def _apig_headers(authorization: str, client_version: str, device_id: str | None
     if vehicle_id:
         headers["X-Vehicle-Id"] = vehicle_id
     return headers
+
+
+def _date_query_value(value: date | str) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value).isoformat()
+        except ValueError as error:
+            raise ValueError("AITO trip history dates must use YYYY-MM-DD") from error
+    raise TypeError("AITO trip history dates must be date or YYYY-MM-DD strings")
+
 
 def _urllib_transport(
     method: str,

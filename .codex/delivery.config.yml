@@ -1,0 +1,65 @@
+version: 1
+project:
+  name: aito
+  type: home-assistant-custom-integration
+  root: .
+
+paths:
+  docs_dir: docs/autopilot
+
+risk_levels:
+  L1:
+    description: local-only documentation
+    required_gates: [diff_check]
+  L2:
+    description: cloud API, coordinator, entity, or release metadata change
+    required_gates: [diff_check, build_or_compile, unit, domain_specific]
+  L3:
+    description: production Home Assistant upgrade, restart, account operation, or vehicle action
+    required_gates: [diff_check, build_or_compile, unit, integration, e2e_smoke, domain_specific, manual_confirmation]
+
+commands:
+  diff_check:
+    - "git diff --check"
+  build_or_compile:
+    - "python3.12 -m compileall -q custom_components tests"
+  unit:
+    - "python3.12 -m unittest discover -s tests -v"
+  domain_specific:
+    - "python3.12 -m json.tool custom_components/aito/manifest.json >/dev/null"
+    - "python3.12 -m json.tool custom_components/aito/strings.json >/dev/null"
+    - "python3.12 -m json.tool custom_components/aito/translations/zh-Hans.json >/dev/null"
+    - "python3.12 -m json.tool hacs.json >/dev/null"
+
+retries:
+  auto_fix_attempts: 1
+  gate_retry_attempts: 1
+
+deploy:
+  preview:
+    enabled: false
+    command: "echo 'no preview environment configured'"
+    requires_confirmation: false
+  production:
+    enabled: false
+    command: "echo 'upgrade through reviewed Home Assistant operations'"
+    rollback_command: "echo 'restore the previous custom_components/aito version'"
+    strategy: canary
+    requires_confirmation: true
+
+manual_gates:
+  prod_release: true
+  destructive_migration: true
+  billing_auth_permission_breaking_change: true
+  remote_deploy_or_service_restart: true
+  real_hardware_action: true
+  production_data_cleanup: true
+
+artifacts:
+  requirements: docs/autopilot/需求文档.md
+  design: docs/autopilot/方案设计.md
+  plan: docs/autopilot/执行计划.md
+  compliance_checklist: docs/autopilot/规范执行检查清单.md
+  pre_release_report: docs/autopilot/预发布报告.md
+  release_notes: docs/autopilot/发布说明.md
+  post_release: docs/autopilot/发布后验证.md

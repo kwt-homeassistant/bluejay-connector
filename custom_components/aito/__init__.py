@@ -41,7 +41,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .coordinator import AitoDataCoordinator
     from .devices import vehicle_spec_for
     from .resources import remove_vehicle_resources
-    from .storage import AitoAssetStore, AitoDeviceIdentityStore, asset_key_from_login_data
+    from .storage import (
+        AitoAssetStore,
+        AitoDeviceIdentityStore,
+        AitoTripHistoryStore,
+        asset_key_from_login_data,
+    )
 
     asset_key = entry.data.get(CONF_ASSET_KEY)
     asset_store = AitoAssetStore(hass, asset_key) if asset_key else None
@@ -113,6 +118,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         omp_cookies=_saved_session_context(assets, identity).get("omp_cookies"),
         apig_verify_ssl=False,
     )
+    trip_history_store = AitoTripHistoryStore(hass, entry.entry_id)
+    trip_histories = await trip_history_store.async_load()
     coordinator = None
     if vehicle_specs:
         coordinator = AitoDataCoordinator(
@@ -125,6 +132,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             asset_store=asset_store,
             identity=identity,
             identity_store=identity_store,
+            trip_history_store=trip_history_store,
+            trip_histories=trip_histories,
         )
         initial_data = {
             vehicle_id: snapshot
@@ -143,6 +152,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "assets": assets,
         "identity": identity,
         "coordinator": coordinator,
+        "trip_history_store": trip_history_store,
         "raw_status_sensor_loaded": bool(assets.get(CONF_RAW_STATUS_SNAPSHOT_CREATED) or vehicle_specs),
         "raw_status_snapshots": raw_status_snapshots,
         "vehicles": vehicles,
@@ -160,6 +170,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     loaded = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("raw_status_sensor_loaded", False)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS) if loaded else True
     if unload_ok:
+        coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("coordinator")
+        if coordinator is not None:
+            await coordinator.async_shutdown()
         hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     return unload_ok
 
@@ -171,7 +184,7 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     from .const import CONF_ASSET_KEY, DOMAIN
     from .resources import remove_vehicle_resources
-    from .storage import AitoAssetStore
+    from .storage import AitoAssetStore, AitoTripHistoryStore
 
     asset_key = entry.data.get(CONF_ASSET_KEY)
     if asset_key:
@@ -181,6 +194,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
             hass.config.path(".storage", DOMAIN, "resources"),
             str(asset_key),
         )
+    await AitoTripHistoryStore(hass, entry.entry_id).async_remove()
 
 
 def _raise_setup_auth_failed(message: str) -> None:
@@ -240,7 +254,7 @@ async def _async_extract_car_images(hass: HomeAssistant, assets: Any, vehicles: 
             if index == 0 and os.path.isfile(destination) and not os.path.isfile(default_alias):
                 await hass.async_add_executor_job(shutil.copyfile, destination, default_alias)
         except (AitoResourceError, OSError):
-            _LOGGER.warning("AITO could not extract car image for vehicle %s", vehicle.id, exc_info=True)
+            _LOGGER.warning("AITO could not extract the configured vehicle image", exc_info=True)
 
 
 def _remove_legacy_entities(

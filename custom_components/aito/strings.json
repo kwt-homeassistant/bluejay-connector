@@ -77,6 +77,54 @@
       "average_fuel_consumption": {
         "name": "Average fuel consumption"
       },
+      "today_average_power_consumption": {
+        "name": "Today's average energy consumption"
+      },
+      "today_average_fuel_consumption": {
+        "name": "Today's average fuel consumption"
+      },
+      "today_total_power_consumption": {
+        "name": "Today's energy consumption"
+      },
+      "today_total_fuel_consumption": {
+        "name": "Today's fuel consumption"
+      },
+      "month_average_power_consumption": {
+        "name": "This month's average energy consumption"
+      },
+      "month_average_fuel_consumption": {
+        "name": "This month's average fuel consumption"
+      },
+      "month_total_power_consumption": {
+        "name": "This month's energy consumption"
+      },
+      "month_total_fuel_consumption": {
+        "name": "This month's fuel consumption"
+      },
+      "last_trip_distance": {
+        "name": "Last trip distance"
+      },
+      "last_trip_started_at": {
+        "name": "Last trip start time"
+      },
+      "last_trip_duration": {
+        "name": "Last trip duration"
+      },
+      "today_trip_distance": {
+        "name": "Today's driving distance"
+      },
+      "seven_day_trip_distance": {
+        "name": "Last 7 days driving distance"
+      },
+      "trip_report_updated_at": {
+        "name": "Trip report updated at"
+      },
+      "trip_history_coverage_days": {
+        "name": "Trip history coverage"
+      },
+      "trip_history_backfill_progress": {
+        "name": "Trip history backfill progress"
+      },
       "sum_remaining_mileage": {
         "name": "Combined range"
       },
