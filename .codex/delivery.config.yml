@@ -22,14 +22,19 @@ commands:
   diff_check:
     - "git diff --check"
   build_or_compile:
-    - "python3.12 -m compileall -q custom_components tests"
+    - "python3.12 -c \"from pathlib import Path; [compile(path.read_text(), str(path), 'exec') for path in Path('custom_components').rglob('*.py')]; [compile(path.read_text(), str(path), 'exec') for path in Path('tests').rglob('*.py')]\""
   unit:
     - "python3.12 -m unittest discover -s tests -v"
+  integration:
+    - "python3.12 -m unittest discover -s tests -p 'test_charge_telemetry.py' -v"
+  e2e_smoke:
+    - "echo 'production smoke checks are defined in the private Home Assistant operations runbook'"
   domain_specific:
     - "python3.12 -m json.tool custom_components/aito/manifest.json >/dev/null"
     - "python3.12 -m json.tool custom_components/aito/strings.json >/dev/null"
     - "python3.12 -m json.tool custom_components/aito/translations/zh-Hans.json >/dev/null"
     - "python3.12 -m json.tool hacs.json >/dev/null"
+    - "gitleaks detect --source . --no-git --redact"
 
 retries:
   auto_fix_attempts: 1
