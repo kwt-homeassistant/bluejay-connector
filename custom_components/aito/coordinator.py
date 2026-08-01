@@ -51,7 +51,7 @@ from .devices import (
 from .huawei_auth import HuaweiAuthError, HuaweiIosAuthClient
 from .models import Vehicle
 from .storage import decrypt_password, decrypt_session_context, encrypt_session_context
-from .trip_history import TripHistory, next_backfill_range
+from .trip_history import TripHistory, next_backfill_range, response_shape
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -256,7 +256,10 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             self._trip_history_refresh_at[vehicle_id] = now + _TRIP_HISTORY_REFRESH_SECONDS
             return None
         except ValueError:
-            _LOGGER.warning("AITO trip history response did not match the expected contract")
+            _LOGGER.warning(
+                "AITO trip history response did not match the expected contract; shape=%s",
+                response_shape(response),
+            )
             self._trip_history_refresh_at[vehicle_id] = now + _TRIP_HISTORY_REFRESH_SECONDS
             return None
         self._trip_history_refresh_at[vehicle_id] = now + _TRIP_HISTORY_REFRESH_SECONDS
@@ -345,7 +348,12 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         except asyncio.CancelledError:
             raise
         except Exception:
-            _LOGGER.warning("AITO trip history backfill paused and will retry", exc_info=True)
+            shape = response_shape(response) if "response" in locals() else "unavailable"
+            _LOGGER.warning(
+                "AITO trip history backfill paused and will retry; shape=%s",
+                shape,
+                exc_info=True,
+            )
             self._trip_history_backfill_retry_at[vehicle_id] = (
                 time.monotonic() + _TRIP_HISTORY_BACKFILL_RETRY_SECONDS
             )

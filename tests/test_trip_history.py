@@ -39,6 +39,64 @@ trip_history = _load_module(
 
 
 class TripHistoryTest(unittest.TestCase):
+    def test_response_shape_never_includes_values_or_unknown_keys(self) -> None:
+        shape = trip_history.response_shape(
+            {
+                "resultCode": 0,
+                "data": {
+                    "tripList": [
+                        {
+                            "tripOdo": 12.3,
+                            "tripId": "private-trip-id",
+                            "2026-08-01": {"coordinate": "private-location"},
+                        }
+                    ]
+                },
+            }
+        )
+
+        self.assertIn("resultCode:number", shape)
+        self.assertIn("tripList:list[object", shape)
+        self.assertIn("<redacted-key>:object", shape)
+        self.assertNotIn("12.3", shape)
+        self.assertNotIn("private-trip-id", shape)
+        self.assertNotIn("private-location", shape)
+
+    def test_parses_native_top_level_trip_array(self) -> None:
+        history = trip_history.TripHistory.from_api(
+            [
+                {
+                    "date": "2099-01-07",
+                    "odo": 7.5,
+                    "trips": [
+                        {
+                            "tripOdo": 7.5,
+                            "tripStartTime": "2099-01-07T10:00:00+08:00",
+                            "tripTime": 20,
+                        }
+                    ],
+                }
+            ],
+            start_date=date(2099, 1, 1),
+            end_date=date(2099, 1, 7),
+            fetched_at=datetime(2099, 1, 7, 3, tzinfo=timezone.utc),
+            local_tz=LOCAL_TZ,
+        )
+
+        self.assertEqual(history.days[0].distance_km, 7.5)
+        self.assertEqual(history.latest_trip.duration_minutes, 20)
+
+    def test_parses_wrapped_trip_list_compatibility_shape(self) -> None:
+        history = trip_history.TripHistory.from_api(
+            {"data": {"tripList": [{"date": "2099-01-07", "odo": 2, "trips": []}]}},
+            start_date=date(2099, 1, 1),
+            end_date=date(2099, 1, 7),
+            fetched_at=datetime(2099, 1, 7, 3, tzinfo=timezone.utc),
+            local_tz=LOCAL_TZ,
+        )
+
+        self.assertEqual(history.days[0].distance_km, 2)
+
     def test_parses_bounded_days_and_builds_sensor_summary(self) -> None:
         start_date = date(2099, 1, 1)
         end_date = date(2099, 1, 7)

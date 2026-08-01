@@ -6,6 +6,30 @@ import math
 from typing import Any, Mapping
 
 
+_SAFE_SHAPE_KEYS = {
+    "avgFuelConsum",
+    "avgPowerConsum",
+    "avgSpeed",
+    "code",
+    "data",
+    "date",
+    "endDate",
+    "errorCode",
+    "maxSpeed",
+    "message",
+    "msg",
+    "odo",
+    "result",
+    "resultCode",
+    "startDate",
+    "tripList",
+    "tripOdo",
+    "trips",
+    "tripStartTime",
+    "tripTime",
+}
+
+
 @dataclass(frozen=True)
 class TripRecord:
     distance_km: float | None
@@ -265,13 +289,49 @@ def next_backfill_range(
 
 
 def _trip_groups(response: Any) -> list[Mapping[str, Any]]:
+    if isinstance(response, list):
+        return _mapping_list(response)
     candidates = [response]
     if isinstance(response, Mapping):
         candidates.extend(response.get(key) for key in ("data", "result"))
     for candidate in candidates:
-        if isinstance(candidate, Mapping) and isinstance(candidate.get("trips"), list):
-            return _mapping_list(candidate["trips"])
+        if isinstance(candidate, list):
+            return _mapping_list(candidate)
+        if isinstance(candidate, Mapping):
+            for key in ("trips", "tripList"):
+                if isinstance(candidate.get(key), list):
+                    return _mapping_list(candidate[key])
     raise ValueError("AITO trip history response does not contain a trips list")
+
+
+def response_shape(response: Any) -> str:
+    """Describe only container types and safe field names, never response values."""
+
+    def describe(value: Any, depth: int) -> str:
+        if isinstance(value, Mapping):
+            if depth >= 4:
+                return "object"
+            fields: list[str] = []
+            for raw_key, item in list(value.items())[:24]:
+                key = str(raw_key)
+                safe_key = key if key in _SAFE_SHAPE_KEYS else "<redacted-key>"
+                fields.append(f"{safe_key}:{describe(item, depth + 1)}")
+            return "object{" + ",".join(fields) + "}"
+        if isinstance(value, list):
+            if depth >= 4:
+                return "list"
+            return "list" if not value else f"list[{describe(value[0], depth + 1)}]"
+        if value is None:
+            return "null"
+        if isinstance(value, bool):
+            return "bool"
+        if isinstance(value, (int, float)):
+            return "number"
+        if isinstance(value, str):
+            return "string"
+        return type(value).__name__
+
+    return describe(response, 0)
 
 
 def _trip_record(data: Mapping[str, Any]) -> TripRecord | None:
