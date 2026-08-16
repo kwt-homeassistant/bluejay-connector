@@ -3,9 +3,11 @@ from __future__ import annotations
 from homeassistant.components.device_tracker.config_entry import TrackerEntity
 from homeassistant.components.device_tracker.const import SourceType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator import AitoDataCoordinator
+from .location import VehicleLocation, location_attributes, parse_vehicle_location
 from .models import Vehicle, vehicle_device_info
 
 
@@ -22,7 +24,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
 
 
 class AitoVehicleLocationTracker(CoordinatorEntity[AitoDataCoordinator], TrackerEntity):
-    """Expose the vehicle's reported GPS location."""
+    """Expose valid or clearly marked last-known vehicle coordinates."""
 
     _attr_has_entity_name = True
     _attr_translation_key = "location"
@@ -35,7 +37,7 @@ class AitoVehicleLocationTracker(CoordinatorEntity[AitoDataCoordinator], Tracker
 
     @property
     def available(self) -> bool:
-        return super().available and self._coordinates is not None
+        return super().available and self._location is not None
 
     @property
     def source_type(self) -> SourceType:
@@ -43,27 +45,22 @@ class AitoVehicleLocationTracker(CoordinatorEntity[AitoDataCoordinator], Tracker
 
     @property
     def latitude(self) -> float | None:
-        coordinates = self._coordinates
-        return coordinates[0] if coordinates is not None else None
+        location = self._location
+        return location.latitude if location is not None else None
 
     @property
     def longitude(self) -> float | None:
-        coordinates = self._coordinates
-        return coordinates[1] if coordinates is not None else None
+        location = self._location
+        return location.longitude if location is not None else None
 
     @property
-    def _coordinates(self) -> tuple[float, float] | None:
+    def extra_state_attributes(self) -> dict | None:
+        location = self._location
+        if location is None:
+            return None
+        return location_attributes(location, as_local=dt_util.as_local)
+
+    @property
+    def _location(self) -> VehicleLocation | None:
         data = self.coordinator.data.get(self._vehicle_id, {}) if self.coordinator.data else {}
-        location = data.get("location")
-        if not isinstance(location, dict):
-            return None
-        coordinates = location.get("location")
-        if not isinstance(coordinates, dict) or coordinates.get("validFlag") not in {1, "1"}:
-            return None
-        latitude = coordinates.get("latitude")
-        longitude = coordinates.get("longitude")
-        if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
-            return None
-        if isinstance(latitude, bool) or isinstance(longitude, bool):
-            return None
-        return float(latitude), float(longitude)
+        return parse_vehicle_location(data)
