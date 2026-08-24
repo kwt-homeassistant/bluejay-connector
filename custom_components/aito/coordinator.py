@@ -6,6 +6,7 @@ from functools import partial
 import logging
 import time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -50,6 +51,11 @@ from .devices import (
 )
 from .huawei_auth import HuaweiAuthError, HuaweiIosAuthClient
 from .models import Vehicle
+from .prepare_car import (
+    PrepareCarCommandTracker,
+    PrepareCarCooldownError,
+    departure_plan_matches,
+)
 from .storage import decrypt_password, decrypt_session_context, encrypt_session_context
 from .trip_history import TripHistory, next_backfill_range, response_shape
 
@@ -65,6 +71,9 @@ _TRIP_HISTORY_BACKFILL_RETRY_SECONDS = 30 * 60
 
 # The vehicle answers a command that would not change its state with this code.
 _COMMAND_STATE_UNCHANGED_CODES = frozenset({302, "302"})
+_PREPARE_CAR_READBACK_ATTEMPTS = 5
+_PREPARE_CAR_READBACK_DELAY_SECONDS = 2.0
+_SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
@@ -106,6 +115,8 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._trip_history_refresh_at: dict[str, float] = {}
         self._trip_history_backfill_tasks: dict[str, asyncio.Task[None]] = {}
         self._trip_history_backfill_retry_at: dict[str, float] = {}
+        self._prepare_car_lock = asyncio.Lock()
+        self._prepare_car_commands = PrepareCarCommandTracker(cooldown_seconds=60)
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         result: dict[str, dict[str, Any]] = {}
@@ -146,9 +157,70 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         return await self._async_apig_request(self.client.dynamic_infos, vehicle_id, sections)
 
     async def async_control_now_departure_plan(self, vehicle_id: str, *, enabled: bool) -> None:
-        await self._async_run_vehicle_command(
-            partial(self.client.control_now_departure_plan, vehicle_id, enabled=enabled),
-            "now departure plan",
+        async with self._prepare_car_lock:
+            try:
+                self._prepare_car_commands.begin(
+                    vehicle_id,
+                    enabled=enabled,
+                    now_monotonic=time.monotonic(),
+                    requested_at=datetime.now(_SHANGHAI_TZ),
+                )
+            except PrepareCarCooldownError as error:
+                raise AitoCommandError(
+                    "AITO prepare-car command is still cooling down",
+                    result_code="COOLDOWN_ACTIVE",
+                ) from error
+            self.async_update_listeners()
+
+            request = partial(self.client.control_now_departure_plan, vehicle_id, enabled=enabled)
+            try:
+                try:
+                    await self._async_apig_request(request, retry_after_refresh=False)
+                except AitoCommandError as error:
+                    if error.result_code not in _COMMAND_STATE_UNCHANGED_CODES:
+                        raise
+                    _LOGGER.info(
+                        "AITO now departure plan command reported resultCode %r; confirming state",
+                        error.result_code,
+                    )
+                self._prepare_car_commands.mark_pending(vehicle_id)
+                self.async_update_listeners()
+                await self._async_confirm_now_departure_plan(vehicle_id, enabled=enabled)
+            except Exception as error:
+                self._prepare_car_commands.mark_failed(
+                    vehicle_id,
+                    error_code=_prepare_car_error_code(error),
+                )
+                self.async_update_listeners()
+                raise
+
+    async def _async_confirm_now_departure_plan(self, vehicle_id: str, *, enabled: bool) -> None:
+        for attempt in range(1, _PREPARE_CAR_READBACK_ATTEMPTS + 1):
+            self._prepare_car_commands.record_readback(vehicle_id, attempt)
+            raw = await self._async_dynamic_infos(vehicle_id, {"departurePlan": 0})
+            if isinstance(raw, dict):
+                current = (self.data or {}).get(vehicle_id, {})
+                merged = {**current, **raw} if isinstance(current, dict) else dict(raw)
+                self.data = {**(self.data or {}), vehicle_id: merged}
+                self.async_update_listeners()
+                if departure_plan_matches(merged, enabled=enabled):
+                    self._prepare_car_commands.mark_confirmed(
+                        vehicle_id,
+                        confirmed_at=datetime.now(_SHANGHAI_TZ),
+                    )
+                    self.async_update_listeners()
+                    return
+            if attempt < _PREPARE_CAR_READBACK_ATTEMPTS:
+                await asyncio.sleep(_PREPARE_CAR_READBACK_DELAY_SECONDS)
+        raise AitoCommandError(
+            "AITO prepare-car command was not confirmed by departure-plan readback",
+            result_code="READBACK_TIMEOUT",
+        )
+
+    def prepare_car_command_attributes(self, vehicle_id: str) -> dict[str, Any]:
+        return self._prepare_car_commands.snapshot(
+            vehicle_id,
+            now_monotonic=time.monotonic(),
         )
 
     async def async_control_sentry_mode(self, vehicle_id: str, *, enabled: bool) -> None:
@@ -712,6 +784,16 @@ def _session_huawei_cookies(context: dict[str, Any]) -> dict[str, str]:
         for name, value in cookies.items()
         if isinstance(name, str) and isinstance(value, str) and name and value
     }
+
+
+def _prepare_car_error_code(error: Exception) -> str:
+    if isinstance(error, AitoCommandError) and error.result_code:
+        return str(error.result_code)
+    if isinstance(error, asyncio.TimeoutError):
+        return "TIMEOUT"
+    if isinstance(error, AitoApiError):
+        return f"HTTP_{error.status}"
+    return "UNKNOWN"
 
 
 def _is_vehicle_offline(data: dict[str, Any]) -> bool:

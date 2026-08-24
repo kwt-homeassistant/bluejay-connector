@@ -116,7 +116,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         apig_authorization=str(assets[CONF_APIG_AUTHORIZATION]),
         ivcs_device_id=_identity_value(identity, CONF_IVCS_DEVICE_ID) or assets.get(CONF_IVCS_DEVICE_ID),
         omp_cookies=_saved_session_context(assets, identity).get("omp_cookies"),
-        apig_verify_ssl=False,
     )
     trip_history_store = AitoTripHistoryStore(hass, entry.entry_id)
     trip_histories = await trip_history_store.async_load()
@@ -314,7 +313,6 @@ async def _async_capture_raw_status_snapshots(
     client = AitoApiClient(
         apig_authorization=authorization,
         ivcs_device_id=device_id,
-        apig_verify_ssl=False,
     )
     snapshots: dict[str, dict[str, Any]] = {}
     for vehicle in vehicles:

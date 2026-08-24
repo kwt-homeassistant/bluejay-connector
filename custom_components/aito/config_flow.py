@@ -243,7 +243,6 @@ class AitoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         omp_device_id = str(identity[CONF_OMP_DEVICE_ID])
         client = AitoApiClient(
             ivcs_device_id=str(identity[CONF_IVCS_DEVICE_ID]),
-            apig_verify_ssl=False,
         )
         auth_response = client.user_auth(
             auth_code,

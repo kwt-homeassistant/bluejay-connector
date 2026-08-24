@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import hashlib
+from http.client import HTTPSConnection
 import json
 import secrets
 import ssl
@@ -8,11 +10,13 @@ import time
 import uuid
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from .const import (
     APIG_BASE_URL,
+    APIG_TLS_HOST,
+    APIG_TLS_SHA256_FINGERPRINT,
     DEFAULT_APIG_CLIENT_VERSION,
     DEFAULT_DEVICE_MODEL,
     DEFAULT_NATIVE_DEVICE_MODEL,
@@ -64,6 +68,10 @@ class AitoCommandError(RuntimeError):
         self.result_code = result_code
 
 
+class AitoTlsPinError(RuntimeError):
+    """The fixed APIG endpoint did not present the reviewed leaf certificate."""
+
+
 class AitoApiClient:
     def __init__(
         self,
@@ -76,7 +84,6 @@ class AitoApiClient:
         omp_cookies: Mapping[str, str] | None = None,
         timeout: float = 20.0,
         transport: Transport | None = None,
-        apig_verify_ssl: bool = True,
     ) -> None:
         self.omp_base_url = omp_base_url.rstrip("/")
         self.apig_base_url = apig_base_url.rstrip("/")
@@ -85,7 +92,7 @@ class AitoApiClient:
         self.ivcs_device_id = ivcs_device_id
         self.timeout = timeout
         self.transport = transport or _urllib_transport
-        self.apig_transport = transport or (_urllib_transport if apig_verify_ssl else _urllib_insecure_transport)
+        self.apig_transport = transport or _urllib_pinned_apig_transport
         self._cookies = {
             str(name): str(value)
             for name, value in (omp_cookies or {}).items()
@@ -535,20 +542,53 @@ def _urllib_transport(
         return error.code, _response_headers(error.headers), error.read()
 
 
-def _urllib_insecure_transport(
+def _urllib_pinned_apig_transport(
     method: str,
     url: str,
     headers: dict[str, str],
     body: bytes | None,
     timeout: float,
 ) -> tuple[int, dict[str, str], bytes]:
-    request = Request(url, data=body, headers=headers, method=method)
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != APIG_TLS_HOST
+        or parsed.port not in {None, 443}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise AitoTlsPinError("AITO APIG request target is not the fixed reviewed HTTPS endpoint")
+
+    # The APIG leaf is not trusted by the supported HAOS system CA set. Verify
+    # the reviewed leaf before sending any authorization header, and avoid a
+    # redirect-capable client so credentials cannot move to another host.
     context = ssl._create_unverified_context()
+    connection = HTTPSConnection(APIG_TLS_HOST, 443, timeout=timeout, context=context)
     try:
-        with urlopen(request, timeout=timeout, context=context) as response:
-            return response.status, _response_headers(response.headers), response.read()
-    except HTTPError as error:
-        return error.code, _response_headers(error.headers), error.read()
+        connection.connect()
+        certificate = connection.sock.getpeercert(binary_form=True) if connection.sock else None
+        _verify_apig_leaf_certificate(certificate)
+        path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        if 300 <= response.status < 400:
+            raise AitoTlsPinError("AITO APIG redirect was rejected")
+        response_headers = {str(key): str(value) for key, value in response.getheaders()}
+        return response.status, response_headers, response.read()
+    finally:
+        connection.close()
+
+
+def _verify_apig_leaf_certificate(certificate: bytes | None) -> None:
+    if not certificate:
+        raise AitoTlsPinError("AITO APIG did not provide a peer certificate")
+    actual = hashlib.sha256(certificate).hexdigest().upper()
+    expected = APIG_TLS_SHA256_FINGERPRINT.replace(":", "").upper()
+    if not secrets.compare_digest(actual, expected):
+        raise AitoTlsPinError("AITO APIG leaf certificate fingerprint did not match the reviewed pin")
 
 
 def _response_headers(headers: Any) -> dict[str, str]:

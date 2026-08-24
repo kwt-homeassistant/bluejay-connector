@@ -8,6 +8,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import AitoDataCoordinator
 from .models import Vehicle, vehicle_device_info
+from .prepare_car import default_departure_plan
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
@@ -53,6 +54,14 @@ class AitoNowDeparturePlanSwitch(CoordinatorEntity[AitoDataCoordinator], SwitchE
             return None
         return status in {0, "0"}
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        plan = self._plan
+        attributes = self.coordinator.prepare_car_command_attributes(self._vehicle_id)
+        if plan is not None and plan.get("planStatus") is not None:
+            attributes["plan_status"] = plan.get("planStatus")
+        return attributes
+
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self.coordinator.async_control_now_departure_plan(self._vehicle_id, enabled=True)
 
@@ -62,16 +71,7 @@ class AitoNowDeparturePlanSwitch(CoordinatorEntity[AitoDataCoordinator], SwitchE
     @property
     def _plan(self) -> dict[str, Any] | None:
         data = self.coordinator.data.get(self._vehicle_id, {}) if self.coordinator.data else {}
-        departure_plan = data.get("departurePlan")
-        if not isinstance(departure_plan, dict):
-            return None
-        plans = departure_plan.get("departurePlanList")
-        if not isinstance(plans, list):
-            return None
-        return next(
-            (plan for plan in plans if isinstance(plan, dict) and plan.get("planId") in {0, "0"}),
-            None,
-        )
+        return default_departure_plan(data)
 
 
 class AitoSentryModeSwitch(CoordinatorEntity[AitoDataCoordinator], SwitchEntity):
