@@ -37,6 +37,15 @@ class ChargePlatformParsingTest(unittest.TestCase):
             with self.subTest(response=response), self.assertRaises(ValueError):
                 platform.parse_platform_dictionary(response)
 
+    def test_observed_string_success_code_matches_native_json_get_int(self):
+        response=dictionary();response['code']='0';response['resultCode']='0'
+        mapping=platform.parse_platform_dictionary(response)
+        self.assertEqual(platform.platform_for_project(mapping,'SERES-F3'),'2')
+        for value in (False,0.0,'00','false','1',None):
+            response['code']=value
+            with self.subTest(code=value),self.assertRaises(ValueError):
+                platform.parse_platform_dictionary(response)
+
     def test_cache_expiry_and_clock_skew_fail_closed(self):
         now = datetime.now(TZ)
         for stamp in [None,now.replace(tzinfo=None),now+timedelta(seconds=1),now-timedelta(hours=6)]:

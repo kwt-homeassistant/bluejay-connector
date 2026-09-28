@@ -220,3 +220,5 @@ Charge platform eligibility is derived from the official App's
 A missing/failed dictionary never enables a command. Schedule clocks retain their
 reported value when the source timezone is missing; only an explicit UTC offset
 is converted to Asia/Shanghai. These compatibility corrections ship in 0.6.1.
+
+Version 0.6.2 accepts the observed string success code `"0"` as well as integer `0`, while rejecting booleans, floats and other codes.

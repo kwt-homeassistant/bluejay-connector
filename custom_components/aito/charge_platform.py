@@ -8,7 +8,9 @@ PLATFORM_RETRY_SECONDS = 5 * 60
 
 def parse_platform_dictionary(response):
     """A missing or failed dictionary is never equivalent to the App default."""
-    if not isinstance(response, dict) or type(response.get("code")) is not int or response["code"] != 0:
+    if not isinstance(response, dict) or not (
+            (type(response.get("code")) is int and response["code"] == 0)
+            or (type(response.get("code")) is str and response["code"] == "0")):
         raise ValueError("platform_dictionary_failed")
     rows = response.get("dicparamList")
     if not isinstance(rows, list):
