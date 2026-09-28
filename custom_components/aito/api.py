@@ -325,6 +325,21 @@ class AitoApiClient:
             {"enabled": str(enabled).lower()},
         )
 
+    def control_charge_default(self, vehicle_id: str, target: int) -> None:
+        """Observed App 3.0.2.320 contract; only the approved default targets."""
+        if type(target) is not int or target not in {90, 95, 100}:
+            raise ValueError("unsupported automatic charge target")
+        command_id = self._request(
+            "PUT",
+            f"{self.apig_base_url}/vctrl/v1/controls/charging/percentage?{urlencode({'chargePercentageMax': target})}",
+            _apig_headers(self._require_apig_authorization(), self.apig_client_version,
+                          self.ivcs_device_id, vehicle_id),
+            None, transport=self.apig_transport,
+        )
+        if not isinstance(command_id, str) or not command_id:
+            raise AitoCommandError("AITO charge limit did not return a command id")
+        self._wait_for_command(vehicle_id, command_id)
+
     def control_sentry_mode(self, vehicle_id: str, *, enabled: bool) -> None:
         """Enable or disable the observed immediate sentry mode control."""
         self._control_vctrl_query(

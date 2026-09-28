@@ -20,6 +20,7 @@ except ModuleNotFoundError:
         pass
 
 from .api import AitoApiClient, AitoApiError, AitoCommandError
+from .charge_limit import charge_snapshot
 from .auth import P256KeyPair, extract_credentials, extract_vehicle_authorization, session_key_status
 from .const import (
     CONF_ACCESS_TOKEN,
@@ -73,6 +74,8 @@ _TRIP_HISTORY_BACKFILL_RETRY_SECONDS = 30 * 60
 _COMMAND_STATE_UNCHANGED_CODES = frozenset({302, "302"})
 _PREPARE_CAR_READBACK_ATTEMPTS = 5
 _PREPARE_CAR_READBACK_DELAY_SECONDS = 2.0
+_CHARGE_LIMIT_READBACK_ATTEMPTS = 9
+_CHARGE_LIMIT_READBACK_DELAY_SECONDS = 5.0
 _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -115,6 +118,8 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._trip_history_refresh_at: dict[str, float] = {}
         self._trip_history_backfill_tasks: dict[str, asyncio.Task[None]] = {}
         self._trip_history_backfill_retry_at: dict[str, float] = {}
+        self.charge_limit_snapshots = {}
+        self.charge_limit_entities = {}
         self._prepare_car_lock = asyncio.Lock()
         self._prepare_car_commands = PrepareCarCommandTracker(cooldown_seconds=60)
 
@@ -127,6 +132,7 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 continue
             raw = await self._async_dynamic_infos(vehicle.id, dynamic_sections(spec))
             data = raw if isinstance(raw, dict) else {}
+            self.charge_limit_snapshots[vehicle.id] = charge_snapshot(data)
             # While the vehicle sleeps (connectStatus=0) it stops reporting live
             # data and the API returns placeholder values (cabin temp 20.0C, A/C
             # temp 6553.5C, etc. — plausible-looking but fake). Keep the previous
@@ -155,6 +161,64 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
     async def _async_dynamic_infos(self, vehicle_id: str, sections: dict[str, int]) -> Any:
         return await self._async_apig_request(self.client.dynamic_infos, vehicle_id, sections)
+
+    async def async_apply_charge_default(self, vehicle_id, target, expected_previous, mode, observed_at):
+        """One PUT, strict precondition and telemetry confirmation. Never retry PUT."""
+        vehicle = next((v for v in self.vehicles if v.id == vehicle_id), None)
+        if vehicle is None or vehicle.profile.project_code != "SERES-F3" or vehicle.profile.platform_version != "2":
+            return {"state":"unsupported_vehicle", "vehicle_action_invoked":False}
+        if type(target) is not int or target not in {90,95,100} or mode not in {"ac","dc"}:
+            raise ValueError("invalid_charge_default")
+        if (mode == "dc" and target != 90) or (mode == "ac" and target not in {95,100}):
+            raise ValueError("invalid_charge_default_mode")
+        if type(expected_previous) is not int or not 50 <= expected_previous <= 100:
+            raise ValueError("invalid_previous_charge_target")
+        try:
+            observed = datetime.fromisoformat(observed_at)
+        except (TypeError, ValueError):
+            return {"state":"stale_precondition", "vehicle_action_invoked":False}
+        async with self._prepare_car_lock:
+            # Waiting for another vehicle command must not extend this lease.
+            if observed.tzinfo is None or not 0 <= (datetime.now(_SHANGHAI_TZ)-observed).total_seconds() <= 120:
+                return {"state":"stale_precondition", "vehicle_action_invoked":False}
+            try:
+                raw = await self._async_dynamic_infos(vehicle_id, {"charge":0,"vehicleStatus":0})
+            except Exception:
+                return {"state":"invalid_precondition", "vehicle_action_invoked":False}
+            before = charge_snapshot(raw)
+            if not 0 <= (datetime.now(_SHANGHAI_TZ)-observed).total_seconds() <= 120:
+                return {"state":"stale_precondition", "vehicle_action_invoked":False}
+            if not before.get("valid") or not before["connected"] or before["mode"] != mode or datetime.fromisoformat(before["sampled_at"]) < observed:
+                return {"state":"invalid_precondition", "vehicle_action_invoked":False}
+            if before["target"] != expected_previous:
+                return {"state":"manual_override", "vehicle_action_invoked":False, "actual_target":before["target"]}
+            if before["target"] == target:
+                return {"state":"confirmed", "vehicle_action_invoked":False, "actual_target":target}
+            if before["charging"] and target <= before["soc"]:
+                return {"state":"target_already_reached", "vehicle_action_invoked":False}
+            invoked = False
+            try:
+                invoked = True
+                await self._async_apig_request(self.client.control_charge_default, vehicle_id, target, retry_after_refresh=False)
+                for attempt in range(_CHARGE_LIMIT_READBACK_ATTEMPTS):
+                    if attempt: await asyncio.sleep(_CHARGE_LIMIT_READBACK_DELAY_SECONDS)
+                    latest = await self._async_dynamic_infos(vehicle_id, {"charge":0,"vehicleStatus":0})
+                    frame = charge_snapshot(latest)
+                    self.charge_limit_snapshots[vehicle_id] = frame
+                    if isinstance(latest,dict):
+                        self.async_set_updated_data({**(self.data or {}), vehicle_id:{**(self.data or {}).get(vehicle_id,{}), **latest}})
+                    if not frame.get("valid") or not frame["connected"] or frame["mode"] != mode:
+                        return {"state":"uncertain", "vehicle_action_invoked":True}
+                    if datetime.fromisoformat(frame["sampled_at"]) <= datetime.fromisoformat(before["sampled_at"]):
+                        continue
+                    if frame["target"] == target:
+                        return {"state":"confirmed", "vehicle_action_invoked":True,"actual_target":target,"sampled_at":frame["sampled_at"]}
+                    if frame["target"] != expected_previous:
+                        return {"state":"manual_override", "vehicle_action_invoked":True,"actual_target":frame["target"]}
+            except Exception:
+                # Server receipt/transport failure is not permission to replay.
+                return {"state":"uncertain", "vehicle_action_invoked":invoked}
+            return {"state":"uncertain", "vehicle_action_invoked":invoked}
 
     async def async_control_now_departure_plan(self, vehicle_id: str, *, enabled: bool) -> None:
         async with self._prepare_car_lock:

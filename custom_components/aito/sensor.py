@@ -16,6 +16,8 @@ from .const import DOMAIN
 from .coordinator import AitoDataCoordinator
 from .devices import SensorSpec, sensor_value
 from .models import Vehicle, vehicle_device_info
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
@@ -37,6 +39,8 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
             spec = data["vehicle_specs"].get(vehicle.id)
             if spec is not None:
                 entities.extend(AitoMappedSensor(coordinator, vehicle, sensor) for sensor in spec.sensors)
+                if vehicle.profile.project_code == "SERES-F3":
+                    entities.append(AitoChargeLimitSensor(coordinator, vehicle))
     async_add_entities(entities)
 
 
@@ -126,3 +130,44 @@ class AitoMappedSensor(CoordinatorEntity[AitoDataCoordinator], RestoreSensor):
         if self._spec.sticky:
             return self._last_value
         return value
+
+
+class AitoChargeLimitSensor(CoordinatorEntity[AitoDataCoordinator], SensorEntity):
+    """Live target and connector snapshot; never restored from historical state."""
+    _attr_has_entity_name = True
+    _attr_name = "充电上限"
+    _attr_native_unit_of_measurement = "%"
+    _attr_icon = "mdi:battery-charging-90"
+
+    def __init__(self, coordinator, vehicle):
+        super().__init__(coordinator)
+        self._vehicle_id = vehicle.id
+        self._platform_version = vehicle.profile.platform_version
+        self._attr_unique_id = f"{vehicle.id}_charge_limit"
+        self._attr_device_info = vehicle_device_info(vehicle)
+        self.entity_id = "sensor.aito_charge_limit"
+
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        self.coordinator.charge_limit_entities[self.entity_id] = self._vehicle_id
+
+    async def async_will_remove_from_hass(self):
+        self.coordinator.charge_limit_entities.pop(self.entity_id,None)
+        await super().async_will_remove_from_hass()
+
+    @property
+    def available(self):
+        value=self.coordinator.charge_limit_snapshots.get(self._vehicle_id,{})
+        try:
+            age=(datetime.now(ZoneInfo("Asia/Shanghai"))-datetime.fromisoformat(value["sampled_at"])).total_seconds()
+            return super().available and value.get("notice_valid") is True and 0<=age<=120
+        except (KeyError,ValueError,TypeError): return False
+
+    @property
+    def native_value(self):
+        return self.coordinator.charge_limit_snapshots.get(self._vehicle_id,{}).get("target")
+
+    @property
+    def extra_state_attributes(self):
+        return {**self.coordinator.charge_limit_snapshots.get(self._vehicle_id,{}),
+                "platform_version":self._platform_version,"contract_version":"charge-default-v1"}

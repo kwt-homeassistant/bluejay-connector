@@ -157,6 +157,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "vehicles": vehicles,
         "vehicle_specs": vehicle_specs,
     }
+    from .charge_limit import register_service
+    register_service(hass)
     if assets.get(CONF_RAW_STATUS_SNAPSHOT_CREATED) or vehicle_specs:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))

@@ -1,0 +1,34 @@
+apply_charge_default:
+  name: Apply charging default with precondition
+  description: Applies one approved target only if fresh connector and previous target match. Returns confirmed, manual_override, or uncertain; never starts charging.
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: sensor
+          integration: aito
+    target:
+      required: true
+      selector:
+        number:
+          min: 90
+          max: 100
+          step: 5
+          mode: box
+    expected_previous:
+      required: true
+      selector:
+        number:
+          min: 50
+          max: 100
+          step: 1
+    mode:
+      required: true
+      selector:
+        select:
+          options: ["ac", "dc"]
+    observed_at:
+      required: true
+      selector:
+        text:
