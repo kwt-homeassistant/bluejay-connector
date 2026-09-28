@@ -213,3 +213,10 @@ type: custom:aito-card
 python3.12 -m pip install -r tests/requirements.txt
 python3.12 -m unittest discover -s tests -v
 ```
+
+
+Charge platform eligibility is derived from the official App's
+`DCC_VEHICLE_PLATFORM_VERSION` dictionary, with a six-hour in-memory validity.
+A missing/failed dictionary never enables a command. Schedule clocks retain their
+reported value when the source timezone is missing; only an explicit UTC offset
+is converted to Asia/Shanghai. These compatibility corrections ship in 0.6.1.

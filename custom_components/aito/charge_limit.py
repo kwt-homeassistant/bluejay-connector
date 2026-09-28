@@ -14,11 +14,13 @@ def _number(value, maximum, *, absolute=False):
     return float(value) if 0 <= value <= maximum else None
 
 
-def _local_clock(value):
-    # Native BasePlanRequest.getStartTimeInLocalTz converts UTC HHmm.
+def _local_clock(value, source_zone=None):
+    # Native legacy plans convert UTC; ArkUI copies plan clocks directly.
+    # Absent timeZone is not proof of UTC, so preserve its reported clock.
     if not isinstance(value, str) or not re.fullmatch(r"(?:[01][0-9]|2[0-3])[0-5][0-9]", value):
         return None
-    return f"{(int(value[:2]) + 8) % 24:02d}:{value[2:]}"
+    offset = 8 if source_zone in {"UTC", "GMT+00:00"} else 0
+    return f"{(int(value[:2]) + offset) % 24:02d}:{value[2:]}"
 
 
 def _schedule(charge):
@@ -30,12 +32,17 @@ def _schedule(charge):
     # Multiple active plans need the App's selection policy; never pick one arbitrarily.
     if len(active) != 1:
         return {"start_clock": None, "end_clock": None, "end_enabled": None,
-                "timing": "reported_clock_only"}
+                "timing": "reported_clock_only", "timezone_confirmed": False,
+                "timezone_status": "unreported"}
     plan = active[0]
-    return {"start_clock": _local_clock(plan.get("startTime")),
-            "end_clock": _local_clock(plan.get("endTime")),
+    source_zone = plan.get("timeZone")
+    source_zone = source_zone.strip() if isinstance(source_zone, str) else None
+    confirmed = source_zone in {"GMT+08:00", "Asia/Shanghai", "UTC", "GMT+00:00"}
+    return {"start_clock": _local_clock(plan.get("startTime"), source_zone),
+            "end_clock": _local_clock(plan.get("endTime"), source_zone),
             "end_enabled": plan.get("endSwitch") == 1,
-            "timing": "reported_clock_only"}
+            "timing": "reported_clock_only", "timezone_confirmed": confirmed,
+            "timezone_status": "confirmed" if confirmed else "unreported" if not source_zone else "unsupported"}
 
 
 def charge_snapshot(data, *, now=None):

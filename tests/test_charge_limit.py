@@ -92,6 +92,8 @@ class ChargeLimitCoordinatorTest(unittest.IsolatedAsyncioTestCase):
             project_code='SERES-F3', platform_version='2'))]
         instance._prepare_car_lock = asyncio.Lock()
         instance.charge_limit_snapshots = {}
+        instance.platform_versions = {'vehicle':'2'}
+        instance.platform_versions_verified_at = datetime.now(TZ)
         instance.data = {'vehicle': {'retained': True}}
         instance.client = types.SimpleNamespace(control_charge_default=Mock())
         instance._async_dynamic_infos = AsyncMock(side_effect=frames or [raw_frame(),raw_frame(target=95,age=10)])
@@ -123,6 +125,7 @@ class ChargeLimitCoordinatorTest(unittest.IsolatedAsyncioTestCase):
             instance = self.instance()
             instance.vehicles[0].profile.project_code = project
             instance.vehicles[0].profile.platform_version = platform
+            instance.platform_versions['vehicle'] = platform
             self.assertEqual((await self.apply(instance))['state'],'unsupported_vehicle')
             instance._async_apig_request.assert_not_awaited()
         for kwargs in [dict(target=90),dict(mode='dc',target=95),dict(target=96),
@@ -289,12 +292,33 @@ if __name__ == '__main__':
 class NoticeTelemetryTest(unittest.TestCase):
     def test_schedule_utc_to_shanghai_clock_and_no_private_fields(self):
         raw=raw_frame()
-        raw['charge']['chargePlanList']=[{'startSwitch':1,'startTime':'1400','endTime':'2300','endSwitch':1,'vehicleId':'private','planId':123,'weeks':'1,2'}]
+        raw['charge']['chargePlanList']=[{'startSwitch':1,'startTime':'1400','endTime':'2300','timeZone':'UTC','endSwitch':1,'vehicleId':'private','planId':123,'weeks':'1,2'}]
         value=charge_limit.charge_snapshot(raw)
         self.assertEqual(value['schedule']['start_clock'],'22:00')
         self.assertEqual(value['schedule']['end_clock'],'07:00')
+        self.assertTrue(value['schedule']['timezone_confirmed'])
         self.assertNotIn('private',json.dumps(value))
         self.assertNotIn('weeks',value['schedule'])
+    def test_unreported_or_unsupported_timezone_never_shifts_clock(self):
+        for zone in (None, '', 'Europe/London', '+08:00', {'invalid':'object'}):
+            with self.subTest(zone=zone):
+                raw=raw_frame()
+                raw['charge']['chargePlanList']=[{'startSwitch':1,'startTime':'0001','endTime':'0601','endSwitch':1,'timeZone':zone}]
+                schedule=charge_limit.charge_snapshot(raw)['schedule']
+                self.assertEqual(schedule['start_clock'],'00:01')
+                self.assertEqual(schedule['end_clock'],'06:01')
+                self.assertFalse(schedule['timezone_confirmed'])
+    def test_explicit_timezone_contract(self):
+        for zone, start, end in (('Asia/Shanghai','20:01','02:01'),
+                                 ('GMT+08:00','20:01','02:01'),
+                                 ('UTC','04:01','10:01'),
+                                 ('GMT+00:00','04:01','10:01')):
+            with self.subTest(zone=zone):
+                raw=raw_frame()
+                raw['charge']['chargePlanList']=[{'startSwitch':1,'startTime':'2001','endTime':'0201','endSwitch':1,'timeZone':zone}]
+                schedule=charge_limit.charge_snapshot(raw)['schedule']
+                self.assertEqual((schedule['start_clock'],schedule['end_clock']),(start,end))
+                self.assertTrue(schedule['timezone_confirmed'])
     def test_missing_target_soc_still_has_connection_notice_but_no_write(self):
         raw=raw_frame();raw['charge']['maxSocPercent']=-1;raw['charge']['soc']=-1
         value=charge_limit.charge_snapshot(raw)

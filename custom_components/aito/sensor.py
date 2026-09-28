@@ -142,7 +142,6 @@ class AitoChargeLimitSensor(CoordinatorEntity[AitoDataCoordinator], SensorEntity
     def __init__(self, coordinator, vehicle):
         super().__init__(coordinator)
         self._vehicle_id = vehicle.id
-        self._platform_version = vehicle.profile.platform_version
         self._attr_unique_id = f"{vehicle.id}_charge_limit"
         self._attr_device_info = vehicle_device_info(vehicle)
         self.entity_id = "sensor.aito_charge_limit"
@@ -170,4 +169,6 @@ class AitoChargeLimitSensor(CoordinatorEntity[AitoDataCoordinator], SensorEntity
     @property
     def extra_state_attributes(self):
         return {**self.coordinator.charge_limit_snapshots.get(self._vehicle_id,{}),
-                "platform_version":self._platform_version,"contract_version":"charge-default-v1"}
+                "platform_version":self.coordinator.charge_platform_version(self._vehicle_id),
+                "platform_verified_at":self.coordinator.platform_versions_verified_at.isoformat() if self.coordinator.platform_versions_verified_at else None,
+                "platform_source":"app_platform_dictionary","contract_version":"charge-default-v1"}

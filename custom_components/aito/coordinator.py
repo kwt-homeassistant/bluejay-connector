@@ -21,6 +21,10 @@ except ModuleNotFoundError:
 
 from .api import AitoApiClient, AitoApiError, AitoCommandError
 from .charge_limit import charge_snapshot
+from .charge_platform import (
+    PLATFORM_DICTIONARY, PLATFORM_RETRY_SECONDS, parse_platform_dictionary,
+    platform_cache_fresh, platform_for_project,
+)
 from .auth import P256KeyPair, extract_credentials, extract_vehicle_authorization, session_key_status
 from .const import (
     CONF_ACCESS_TOKEN,
@@ -120,12 +124,17 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._trip_history_backfill_retry_at: dict[str, float] = {}
         self.charge_limit_snapshots = {}
         self.charge_limit_entities = {}
+        self.platform_versions = {}
+        self.platform_versions_verified_at = None
+        self._charge_platform_attempt_at = None
+        self._charge_platform_lock = asyncio.Lock()
         self._prepare_car_lock = asyncio.Lock()
         self._prepare_car_commands = PrepareCarCommandTracker(cooldown_seconds=60)
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         result: dict[str, dict[str, Any]] = {}
         local_today = dt_util.now().date()
+        await self._async_refresh_charge_platforms()
         for vehicle in self.vehicles:
             spec = self.vehicle_specs.get(vehicle.id)
             if spec is None:
@@ -162,10 +171,37 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
     async def _async_dynamic_infos(self, vehicle_id: str, sections: dict[str, int]) -> Any:
         return await self._async_apig_request(self.client.dynamic_infos, vehicle_id, sections)
 
+    def charge_platform_version(self, vehicle_id):
+        if not platform_cache_fresh(self.platform_versions_verified_at, datetime.now(_SHANGHAI_TZ)):
+            return None
+        return self.platform_versions.get(vehicle_id)
+
+    async def _async_refresh_charge_platforms(self):
+        """Read only metadata; failure cannot interrupt ordinary vehicle telemetry."""
+        async with self._charge_platform_lock:
+            if platform_cache_fresh(self.platform_versions_verified_at, datetime.now(_SHANGHAI_TZ)):
+                return
+            attempt = time.monotonic()
+            if self._charge_platform_attempt_at is not None and attempt - self._charge_platform_attempt_at < PLATFORM_RETRY_SECONDS:
+                return
+            self._charge_platform_attempt_at = attempt
+            xid = self.assets.get(CONF_XID)
+            if not isinstance(xid, str) or not xid:
+                return
+            try:
+                response = await self.hass.async_add_executor_job(partial(
+                    self.client.vehicle_dictionary_values, [PLATFORM_DICTIONARY], xid=xid))
+                mapping = parse_platform_dictionary(response)
+            except Exception:
+                return
+            self.platform_versions = {v.id: platform_for_project(mapping, v.profile.project_code)
+                                      for v in self.vehicles}
+            self.platform_versions_verified_at = datetime.now(_SHANGHAI_TZ)
+
     async def async_apply_charge_default(self, vehicle_id, target, expected_previous, mode, observed_at):
         """One PUT, strict precondition and telemetry confirmation. Never retry PUT."""
         vehicle = next((v for v in self.vehicles if v.id == vehicle_id), None)
-        if vehicle is None or vehicle.profile.project_code != "SERES-F3" or vehicle.profile.platform_version != "2":
+        if vehicle is None or vehicle.profile.project_code != "SERES-F3" or self.charge_platform_version(vehicle_id) != "2":
             return {"state":"unsupported_vehicle", "vehicle_action_invoked":False}
         if type(target) is not int or target not in {90,95,100} or mode not in {"ac","dc"}:
             raise ValueError("invalid_charge_default")
@@ -178,6 +214,8 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         except (TypeError, ValueError):
             return {"state":"stale_precondition", "vehicle_action_invoked":False}
         async with self._prepare_car_lock:
+            if self.charge_platform_version(vehicle_id) != "2":
+                return {"state":"unsupported_vehicle", "vehicle_action_invoked":False}
             # Waiting for another vehicle command must not extend this lease.
             if observed.tzinfo is None or not 0 <= (datetime.now(_SHANGHAI_TZ)-observed).total_seconds() <= 120:
                 return {"state":"stale_precondition", "vehicle_action_invoked":False}
@@ -190,6 +228,8 @@ class AitoDataCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 return {"state":"stale_precondition", "vehicle_action_invoked":False}
             if not before.get("valid") or not before["connected"] or before["mode"] != mode or datetime.fromisoformat(before["sampled_at"]) < observed:
                 return {"state":"invalid_precondition", "vehicle_action_invoked":False}
+            if self.charge_platform_version(vehicle_id) != "2":
+                return {"state":"unsupported_vehicle", "vehicle_action_invoked":False}
             if before["target"] != expected_previous:
                 return {"state":"manual_override", "vehicle_action_invoked":False, "actual_target":before["target"]}
             if before["target"] == target:
